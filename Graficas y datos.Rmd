@@ -1,0 +1,162 @@
+---
+title: "Gráficas y análisis de las exportaciones de café: Colombia frente a Vietnam"
+author: "Simón Vallejo (Grupo 4)"
+date: "2026-11-04"
+output: html_document
+---
+
+Análisis exploratorio que acompaña a `cafe.qmd`. Lee la base `cafe_colombia_vietnam.csv`, que debe estar en la misma carpeta que este archivo.
+
+Si no tienen los paquetes, corran una sola vez en la consola (no dentro del documento): `install.packages(c("dplyr", "tidyr", "ggplot2"))`.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+base <- read.csv("cafe_colombia_vietnam.csv", encoding = "UTF-8")
+
+colores <- c(Colombia = "#B5651D", Vietnam = "#2E6E5E")
+fuente  <- "Fuente: DANE-DIAN y Aduana de Vietnam, vía UN Comtrade (27-oct-2026). Cálculo propio."
+
+# Vietnam 2018: peso neto estimado por Comtrade y atípico; no se usa en los cálculos por kilo
+base <- base |>
+  mutate(peso_kg = ifelse(pais == "Vietnam" & anio == 2018, NA, peso_kg))
+```
+
+## 1. Indicadores por país y año
+
+```{r indicadores}
+indicadores <- base |>
+  group_by(pais, anio) |>
+  summarise(
+    valor_total   = sum(valor_usd),
+    procesado_pct = 100 * sum(valor_usd[producto != "Verde"]) / sum(valor_usd),
+    usd_kg        = sum(valor_usd) / sum(peso_kg),
+    usd_kg_verde  = valor_usd[producto == "Verde"] / peso_kg[producto == "Verde"],
+    .groups = "drop"
+  )
+print(indicadores, n = Inf)
+```
+
+## 2. Comparación lado a lado
+
+```{r comparacion}
+comparacion <- indicadores |>
+  select(pais, anio, procesado_pct, usd_kg) |>
+  pivot_wider(names_from = pais, values_from = c(procesado_pct, usd_kg)) |>
+  mutate(brecha_procesado_pp  = procesado_pct_Colombia - procesado_pct_Vietnam,
+         veces_vale_mas_kg_CO = usd_kg_Colombia / usd_kg_Vietnam)
+print(comparacion, n = Inf, width = Inf)
+```
+
+## 3. Promedios y crecimiento 2015–2023 (años con datos de los dos países)
+
+```{r resumen}
+indicadores |>
+  filter(anio <= 2023) |>
+  arrange(anio) |>
+  group_by(pais) |>
+  summarise(procesado_pct_prom   = mean(procesado_pct),
+            usd_kg_prom          = mean(usd_kg, na.rm = TRUE),
+            usd_kg_verde_prom    = mean(usd_kg_verde, na.rm = TRUE),
+            crec_anual_valor_pct = 100 * ((last(valor_total) / first(valor_total))^(1 / 8) - 1)) |>
+  print()
+```
+
+## 4. Descomposición de la brecha en valor por kilo
+
+La brecha Colombia − Vietnam en USD/kg se parte en un efecto mezcla (cuánto se debe a exportar más o menos procesado) y un efecto precio (cuánto se debe a que cada producto vale más en un país que en el otro). Las dos partes suman exactamente la brecha.
+
+```{r descomposicion}
+descomp <- base |>
+  filter(!is.na(peso_kg)) |>
+  group_by(pais, anio) |>
+  mutate(s = peso_kg / sum(peso_kg), p = valor_usd / peso_kg) |>
+  ungroup() |>
+  select(pais, anio, producto, s, p) |>
+  pivot_wider(names_from = pais, values_from = c(s, p)) |>
+  filter(!is.na(s_Colombia), !is.na(s_Vietnam)) |>
+  group_by(anio) |>
+  summarise(
+    brecha       = sum(s_Colombia * p_Colombia) - sum(s_Vietnam * p_Vietnam),
+    mezcla       = sum((s_Colombia - s_Vietnam) * (p_Colombia + p_Vietnam) / 2),
+    precio       = sum((s_Colombia + s_Vietnam) / 2 * (p_Colombia - p_Vietnam)),
+    precio_verde = sum(((s_Colombia + s_Vietnam) / 2 * (p_Colombia - p_Vietnam))[producto == "Verde"]),
+    .groups = "drop"
+  )
+print(descomp, n = Inf)
+cat("Parte promedio del efecto precio que viene del café verde:",
+    round(100 * mean(descomp$precio_verde / descomp$precio), 1), "%\n")
+```
+
+## 5. Gráficas
+
+```{r graficas, fig.width=9, fig.height=5}
+# 5.1 Participación del café procesado
+ggplot(indicadores, aes(anio, procesado_pct, color = pais)) +
+  geom_line(linewidth = 1) + geom_point() +
+  scale_color_manual(values = colores) +
+  scale_x_continuous(breaks = 2015:2024) +
+  labs(title = "Café procesado (tostado + soluble), % del valor exportado",
+       x = NULL, y = "%", color = NULL, caption = fuente) +
+  theme_minimal()
+
+# 5.2 Valor por kilo
+ggplot(filter(indicadores, !is.na(usd_kg)), aes(anio, usd_kg, color = pais)) +
+  geom_line(linewidth = 1) + geom_point() +
+  scale_color_manual(values = colores) +
+  scale_x_continuous(breaks = 2015:2024) +
+  labs(title = "Valor unitario de las exportaciones de café (USD por kilo)",
+       x = NULL, y = "USD/kg", color = NULL, caption = fuente) +
+  theme_minimal()
+
+# 5.3 Valor por kilo de cada producto
+base |>
+  mutate(usd_kg = valor_usd / peso_kg) |>
+  filter(!is.na(usd_kg)) |>
+  ggplot(aes(anio, usd_kg, color = pais)) +
+  geom_line(linewidth = 1) + geom_point() +
+  facet_wrap(~producto, scales = "free_y") +
+  scale_color_manual(values = colores) +
+  labs(title = "USD por kilo según el tipo de café",
+       x = NULL, y = "USD/kg", color = NULL, caption = fuente) +
+  theme_minimal()
+
+# 5.4 Composición del valor exportado
+base |>
+  mutate(producto = factor(producto, levels = c("Verde", "Tostado", "Soluble"))) |>
+  ggplot(aes(factor(anio), valor_usd, fill = producto)) +
+  geom_col(position = "fill") +
+  facet_wrap(~pais) +
+  scale_fill_manual(values = c("#C9B79C", "#8C5A3C", "#3E2A1E")) +
+  scale_y_continuous(labels = function(x) paste0(100 * x, "%")) +
+  labs(title = "Composición del valor exportado de café",
+       x = NULL, y = NULL, fill = NULL, caption = fuente) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90))
+
+# 5.5 Valor exportado total
+ggplot(indicadores, aes(anio, valor_total / 1e6, color = pais)) +
+  geom_line(linewidth = 1) + geom_point() +
+  scale_color_manual(values = colores) +
+  scale_x_continuous(breaks = 2015:2024) +
+  labs(title = "Valor exportado de café (millones de USD)",
+       x = NULL, y = NULL, color = NULL, caption = fuente) +
+  theme_minimal()
+
+# 5.6 Descomposición de la brecha
+descomp |>
+  pivot_longer(c(mezcla, precio), names_to = "efecto", values_to = "usd_kg") |>
+  mutate(efecto = recode(efecto, mezcla = "Mezcla de productos (procesamiento)",
+                         precio = "Precio de cada producto (calidad, especie)")) |>
+  ggplot(aes(factor(anio), usd_kg, fill = efecto)) +
+  geom_col(width = 0.7) +
+  geom_point(data = descomp, aes(factor(anio), brecha), inherit.aes = FALSE,
+             shape = 21, fill = "white", size = 2.5) +
+  scale_fill_manual(values = c("#C9B79C", "#2E6E5E")) +
+  labs(title = "¿De dónde sale la diferencia en el valor por kilo?",
+       subtitle = "Brecha Colombia − Vietnam en USD/kg (punto) y sus dos componentes",
+       x = NULL, y = "USD/kg", fill = NULL, caption = fuente) +
+  theme_minimal() + theme(legend.position = "top")
+```
