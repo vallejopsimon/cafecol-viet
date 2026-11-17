@@ -1,196 +1,285 @@
 ---
+title: "Exportaciones de café e influencia del valor agregado: Colombia frente a Vietnam"
+subtitle: |
+  Proyecto 1: Herramientas y Aplicaciones
+
+  Universidad EAFIT
+author: "Grupo 4: Samuel Mesa, Simón Vallejo y Juan José Ramírez"
+date: 2026-11-16
+date-format: "D [de] MMMM [de] YYYY"
 lang: es
+bibliography: referencias.bib
+csl: apa.csl
+crossref:
+  fig-title: "Gráfica"
+  tbl-title: "Tabla"
+  title-delim: "."
+execute:
+  echo: false
+  warning: false
+  message: false
 format:
   pdf:
+    documentclass: article
     papersize: letter
-    geometry: margin=3cm
+    geometry: margin=2.5cm
     fontsize: 11pt
     pdf-engine: xelatex
+    fig-pos: "H"
+    tbl-cap-location: top
+    fig-cap-location: top
   docx:
     reference-doc: plantilla_cafe_final.docx
+    tbl-cap-location: top
+    fig-cap-location: top
 ---
 
-**Exportaciones de café e influencia del valor agregado: Colombia frente a Vietnam**
+Repositorio: <https://github.com/vallejopsimon/cafecol-viet>
 
-Repositorio:
+```{r}
+#| label: datos
+# Todo número de este documento sale de este código y de cafe_colombia_vietnam.csv
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
 
-Grupo 4: Samuel Mesa, Simón Vallejo y Juan José Ramírez
+base <- read.csv("cafe_colombia_vietnam.csv", encoding = "UTF-8")
 
-Proyecto 1: Herramientas y Aplicaciones
+# Formato de números en español
+num <- function(x, d = 1) ifelse(is.na(x), "-",
+  formatC(x, format = "f", digits = d, big.mark = ".", decimal.mark = ","))
 
-Universidad EAFIT
+# Vietnam 2018: peso neto estimado por Comtrade y atípico; se excluye de los cálculos por kilo
+base_kg <- base |>
+  mutate(peso_kg = ifelse(pais == "Vietnam" & anio == 2018, NA, peso_kg))
 
-16 de noviembre de 2026
+ind <- base_kg |>
+  group_by(pais, anio) |>
+  summarise(
+    valor_total    = sum(valor_usd),
+    peso_total     = sum(peso_kg),
+    proc_valor     = 100 * sum(valor_usd[producto != "Verde"]) / sum(valor_usd),
+    proc_kg        = 100 * sum(peso_kg[producto != "Verde"]) / sum(peso_kg),
+    usd_kg         = sum(valor_usd) / sum(peso_kg),
+    usd_kg_verde   = valor_usd[producto == "Verde"]   / peso_kg[producto == "Verde"],
+    usd_kg_soluble = valor_usd[producto == "Soluble"] / peso_kg[producto == "Soluble"],
+    .groups = "drop"
+  )
 
-**1. La pregunta y la motivación**
+# Valor de una variable para un país y un año
+v <- function(var, p, a) ind[[var]][ind$pais == p & ind$anio == a]
 
-El café es uno de los productos agrícolas de mayor peso en el comercio exterior de Colombia y un sector estratégico para su inclusión en las cadenas globales de valor. Analizar su importancia comercial no implica solo observar cuánto café exporta el país, sino también con qué grado de transformación llega al mercado internacional. Londoño Arias et al. (2025) estudian los factores asociados al desempeño exportador cafetero en América Latina, con atención especial a Colombia, desde la demanda de los países importadores. Este trabajo mira, por otro lado, busca analizar la composición del café que Colombia exporta.
+# Comparación lado a lado
+lado <- ind |>
+  select(pais, anio, proc_valor, proc_kg, usd_kg, usd_kg_soluble) |>
+  pivot_wider(names_from = pais,
+              values_from = c(proc_valor, proc_kg, usd_kg, usd_kg_soluble)) |>
+  mutate(brecha_proc = proc_valor_Vietnam - proc_valor_Colombia,
+         razon_kg    = usd_kg_Colombia / usd_kg_Vietnam,
+         razon_sol   = usd_kg_soluble_Colombia / usd_kg_soluble_Vietnam)
+desde19 <- filter(lado, anio >= 2019, anio <= 2023)
+razones <- filter(lado, anio <= 2023, !is.na(razon_kg))
+sol <- filter(lado, anio <= 2023, !is.na(razon_sol))
 
-Esa composición es muy concentrada. Según la Federación Nacional de Cafeteros, en 2024 Colombia exportó 12.322.863 sacos de 60 kg, de los cuales 11.419.570 fueron café verde, es decir, el 92,7 % del volumen (FNC, 2025). El resto se repartió entre café soluble, extractos y tostado. La tesis que organiza este trabajo es que la alta calidad de la materia prima no necesariamente se traduce en una mayor captura de valor si no se transforma el producto.
+# Descomposición de la brecha en USD por kilo: efecto mezcla + efecto precio
+descomp <- base_kg |>
+  filter(!is.na(peso_kg)) |>
+  group_by(pais, anio) |>
+  mutate(s = peso_kg / sum(peso_kg), p = valor_usd / peso_kg) |>
+  ungroup() |>
+  select(pais, anio, producto, s, p) |>
+  pivot_wider(names_from = pais, values_from = c(s, p)) |>
+  filter(!is.na(s_Colombia), !is.na(s_Vietnam)) |>
+  group_by(anio) |>
+  summarise(
+    brecha = sum(s_Colombia * p_Colombia) - sum(s_Vietnam * p_Vietnam),
+    mezcla = sum((s_Colombia - s_Vietnam) * (p_Colombia + p_Vietnam) / 2),
+    precio = sum((s_Colombia + s_Vietnam) / 2 * (p_Colombia - p_Vietnam)),
+    precio_verde = sum(((s_Colombia + s_Vietnam) / 2 * (p_Colombia - p_Vietnam))[producto == "Verde"]),
+    .groups = "drop"
+  )
+parte_verde <- 100 * mean(descomp$precio_verde / descomp$precio)
 
-Vietnam es el país de comparación porque los dos están entre los mayores exportadores del mundo y tienen mercados en disputa en Estados Unidos, Europa y Asia, donde ambos compiten. En 2023 Vietnam exportó cerca de 1.035 millones de kilos de café verde sin descafeinar y Colombia cerca de 576 millones (UN Comtrade, 2026; cálculo propio). Además, los dos siguieron caminos distintos: Colombia produce arábica lavado y Vietnam, sobre todo robusta, con una industria de café soluble que ha crecido en los últimos años.
+# Crecimiento del valor exportado 2015-2023 (tasa anual compuesta)
+crec <- function(p) 100 * ((v("valor_total", p, 2023) / v("valor_total", p, 2015))^(1 / 8) - 1)
 
-Comparamos, para Colombia y Vietnam y para los años 2015 a 2024, las dos medidas con que la literatura mide el escalamiento en la cadena del café (Görlich et al., 2020): la participación del café procesado (tostado y soluble) en el valor total exportado, y el valor unitario de las exportaciones en dólares por kilo (valor FOB sobre peso neto). Las fuentes son las estadísticas de exportación del DANE y la DIAN para Colombia y las de la aduana de Vietnam para Vietnam, tal como cada país las reporta a UN Comtrade, con las mismas subpartidas en los dos países. El grado de procesamiento se usa como indicador aproximado de transformación, sin asumir que mide por sí solo el valor agregado económico.
+# Movimiento 4: Comtrade en café verde equivalente (factores de la OIC: tostado 1,19; soluble 2,6)
+co24 <- filter(base, pais == "Colombia", anio == 2024)
+kg_eq <- with(co24, sum(peso_kg * c(Verde = 1, Tostado = 1.19, Soluble = 2.6)[producto]))
+verde_eq   <- 100 * co24$peso_kg[co24$producto == "Verde"] / kg_eq
+sacos_eq   <- kg_eq / 60
+verde_val  <- 100 * co24$valor_usd[co24$producto == "Verde"] / sum(co24$valor_usd)
+fnc_verde  <- 100 * 11419570 / 12322863   # FNC, tabla anual 2024
+fnc_sacos  <- 12322863
+```
 
-Por lo anterior, esta investigación se plantea la siguiente pregunta: ¿Cómo influye la falta de valor agregado en las exportaciones de café sobre el desempeño comercial internacional de Colombia comparado con Vietnam?
+{{< pagebreak >}}
 
-**2. Literatura**
+# 1. La pregunta y la motivación
 
-Hanley et al. (2026) parten de que la mayor parte del precio de una taza de café se queda fuera de los países productores, y estudian tres décadas de comercio internacional (1991--2018) que distinguen el café verde, el tostado y el soluble. En la versión de trabajo del artículo, elaborada como estudio de base para el informe de desarrollo cafetero de la Organización Internacional del Café (Görlich et al., 2020; Organización Internacional del Café, 2020), los autores miden dos formas de escalamiento: el funcional, como la participación del café procesado en las exportaciones, y el de producto, como el valor unitario de las exportaciones. Son las dos medidas que usamos en este trabajo. Sus resultados muestran que los países asiáticos tienen más probabilidad de subir en la cadena, que muchos países africanos siguen exportando sobre todo grano verde y que la industrialización, la cercanía a los centros de procesamiento, la variedad de café cultivada y la política comercial explican buena parte de las diferencias (Hanley et al., 2026). En particular, los aranceles de los países importadores sobre el café procesado desestimulan que los productores agreguen valor (Görlich et al., 2020).
+El café es uno de los productos agrícolas de mayor peso en el comercio exterior de Colombia y un sector estratégico para su inclusión en las cadenas globales de valor. Analizar su importancia comercial no implica solo observar cuánto café exporta el país, sino también con qué grado de transformación llega al mercado internacional. @londono2025 estudian los factores asociados al desempeño exportador cafetero en América Latina, con atención especial a Colombia, desde la demanda de los países importadores. Este trabajo mira, por otro lado, busca analizar la composición del café que Colombia exporta.
 
-Görlich et al. (2020) identifican a Vietnam como un ganador en el mercado del café tostado, con más volumen y mejores precios, aunque el precio de su café soluble cayó con el tiempo. Colombia también avanzó en escalamiento funcional, pues pasó de representar el 2 % de las exportaciones de café tostado de Suramérica en 1991 al 83 % en 2018. Los mismos autores encuentran que los productores de arábica lograron aumentos de precio en su café verde mayores que los de robusta, una diferencia de especie y no de transformación. Para Vietnam, el informe anual del Departamento de Agricultura de Estados Unidos proyecta una producción de 31 millones de sacos para 2025-26 y un crecimiento fuerte de sus exportaciones de café tostado y soluble (Nguyen, 2025).
+Esa composición es muy concentrada. Según la Federación Nacional de Cafeteros, en 2024 Colombia exportó 12.322.863 sacos de 60 kg, de los cuales 11.419.570 fueron café verde, es decir, el 92,7 % del volumen [FNC, -@fnc2025]. El resto se repartió entre café soluble, extractos y tostado. La tesis que organiza este trabajo es que la alta calidad de la materia prima no necesariamente se traduce en una mayor captura de valor si no se transforma el producto.
 
-Londoño Arias et al. (2025) estiman, con un modelo lineal mixto para Brasil, Colombia, Honduras, Guatemala y Perú, que la innovación y la productividad de los países importadores se asocian positivamente con sus compras de café latinoamericano y señalan oportunidades en Europa y la necesidad de una mayor integración regional. García Juárez et al. (2025) miden, para Brasil, Colombia, Perú y Ecuador entre 2015 y 2024, la concentración de los destinos con el índice de Herfindahl-Hirschman y la competitividad con la ventaja comparativa revelada. La concentración de Colombia cayó de 6.765 a 4.700 puntos entre 2015 y 2023, aunque sigue por encima del umbral de alta concentración (2.500) y Estados Unidos es su principal comprador. Hay que hacer una aclaración o advertencia sobre esta fuente y es que el resumen habla de café tostado, pero la metodología declara la subpartida 0901.11, que corresponde a café sin tostar.
+Vietnam es el país de comparación porque los dos están entre los mayores exportadores del mundo y tienen mercados en disputa en Estados Unidos, Europa y Asia, donde ambos compiten. En 2023 Vietnam exportó cerca de 1.035 millones de kilos de café verde sin descafeinar y Colombia cerca de 576 millones [UN Comtrade, -@comtrade2026\; cálculo propio]. Además, los dos siguieron caminos distintos: Colombia produce arábica lavado y Vietnam, sobre todo robusta, con una industria de café soluble que ha crecido en los últimos años.
 
-Estos trabajos miden el escalamiento para muchos países a la vez (Hanley et al., 2026) o explican el desempeño exportador por la demanda y los destinos (García Juárez et al., 2025; Londoño Arias et al., 2025). Ninguno compara directamente a Colombia y Vietnam con datos de aduana por forma del producto, ni separa qué parte de la diferencia en el valor por kilo viene de procesar más y qué parte del precio del grano. Ese es el aporte de este trabajo.
+Comparamos, para Colombia y Vietnam y para los años 2015 a 2024, las dos medidas con que la literatura mide el escalamiento en la cadena del café [@gorlich2020]: la participación del café procesado (tostado y soluble) en el valor total exportado, y el valor unitario de las exportaciones en dólares por kilo (valor FOB sobre peso neto). Las fuentes son las estadísticas de exportación del DANE y la DIAN para Colombia y las de la aduana de Vietnam para Vietnam, tal como cada país las reporta a UN Comtrade, con las mismas subpartidas en los dos países. El grado de procesamiento se usa como indicador aproximado de transformación, sin asumir que mide por sí solo el valor agregado económico.
 
-**3. Los datos**
+Por lo anterior, esta investigación se plantea la siguiente pregunta: **¿Cómo influye la falta de valor agregado en las exportaciones de café sobre el desempeño comercial internacional de Colombia comparado con Vietnam?**
+
+# 2. Literatura
+
+@hanley2026 parten de que la mayor parte del precio de una taza de café se queda fuera de los países productores, y estudian tres décadas de comercio internacional (1991--2018) que distinguen el café verde, el tostado y el soluble. En la versión de trabajo del artículo, elaborada como estudio de base para el informe de desarrollo cafetero de la Organización Internacional del Café [@gorlich2020; @oic2020], los autores miden dos formas de escalamiento: el funcional, como la participación del café procesado en las exportaciones, y el de producto, como el valor unitario de las exportaciones. Son las dos medidas que usamos en este trabajo. Sus resultados muestran que los países asiáticos tienen más probabilidad de subir en la cadena, que muchos países africanos siguen exportando sobre todo grano verde y que la industrialización, la cercanía a los centros de procesamiento, la variedad de café cultivada y la política comercial explican buena parte de las diferencias [@hanley2026]. En particular, los aranceles de los países importadores sobre el café procesado desestimulan que los productores agreguen valor [@gorlich2020].
+
+@gorlich2020 identifican a Vietnam como un ganador en el mercado del café tostado, con más volumen y mejores precios, aunque el precio de su café soluble cayó con el tiempo. Colombia también avanzó en escalamiento funcional, pues pasó de representar el 2 % de las exportaciones de café tostado de Suramérica en 1991 al 83 % en 2018. Los mismos autores encuentran que los productores de arábica lograron aumentos de precio en su café verde mayores que los de robusta, una diferencia de especie y no de transformación. Para Vietnam, el informe anual del Departamento de Agricultura de Estados Unidos proyecta una producción de 31 millones de sacos para 2025-26 y un crecimiento fuerte de sus exportaciones de café tostado y soluble [@nguyen2025].
+
+@londono2025 estiman, con un modelo lineal mixto para Brasil, Colombia, Honduras, Guatemala y Perú, que la innovación y la productividad de los países importadores se asocian positivamente con sus compras de café latinoamericano y señalan oportunidades en Europa y la necesidad de una mayor integración regional. @garcia2025 miden, para Brasil, Colombia, Perú y Ecuador entre 2015 y 2024, la concentración de los destinos con el índice de Herfindahl-Hirschman y la competitividad con la ventaja comparativa revelada. La concentración de Colombia cayó de 6.765 a 4.700 puntos entre 2015 y 2023, aunque sigue por encima del umbral de alta concentración (2.500) y Estados Unidos es su principal comprador. Hay que hacer una aclaración o advertencia sobre esta fuente y es que el resumen habla de café tostado, pero la metodología declara la subpartida 0901.11, que corresponde a café sin tostar.
+
+Estos trabajos miden el escalamiento para muchos países a la vez [@hanley2026] o explican el desempeño exportador por la demanda y los destinos [@garcia2025; @londono2025]. Ninguno compara directamente a Colombia y Vietnam con datos de aduana por forma del producto, ni separa qué parte de la diferencia en el valor por kilo viene de procesar más y qué parte del precio del grano. Ese es el aporte de este trabajo.
+
+# 3. Los datos
 
 Cada fila de nuestra base es un país, un año y una subpartida, de 2015 a 2024. Para cada fila tenemos el valor FOB en dólares corrientes y el peso neto en kilos de las exportaciones hacia el mundo en tres subpartidas del Sistema Armonizado: 0901.11 (café sin tostar, sin descafeinar), 0901.21 (café tostado, sin descafeinar) y 2101.11 (extractos, esencias y concentrados de café, es decir, el soluble). Con esos datos calculamos la participación del procesado (0901.21 más 2101.11, dividido por el total de las tres) y el valor unitario (valor total entre peso total).
 
-Para Colombia, el dato lo produce el DANE a partir de las declaraciones de exportación que registra la DIAN. Para Vietnam, lo produce el Departamento General de Aduanas. Los dos países reportan esas cifras a la División de Estadística de Naciones Unidas, que las publica en UN Comtrade sin cambiarles la clasificación (Naciones Unidas, División de Estadística, 2026). Usamos Comtrade como punto de acceso porque entrega las dos series con los mismos códigos, las mismas variables y la misma consulta. La aduana de Vietnam no ofrece un consultador por subpartida y año y la serie por forma del producto de la Organización Internacional del Café es de pago (Organización Internacional del Café, s. f.b). Comtrade republica, pero quienes fabrican el dato son el DANE-DIAN y la aduana vietnamita.
+Para Colombia, el dato lo produce el DANE a partir de las declaraciones de exportación que registra la DIAN. Para Vietnam, lo produce el Departamento General de Aduanas. Los dos países reportan esas cifras a la División de Estadística de Naciones Unidas, que las publica en UN Comtrade sin cambiarles la clasificación [@comtrade2026]. Usamos Comtrade como punto de acceso porque entrega las dos series con los mismos códigos, las mismas variables y la misma consulta. La aduana de Vietnam no ofrece un consultador por subpartida y año y la serie por forma del producto de la Organización Internacional del Café es de pago [@oicstats]. Comtrade republica, pero quienes fabrican el dato son el DANE-DIAN y la aduana vietnamita.
 
-El valor es FOB, es decir, el precio en el puerto de salida, sin flete ni seguro y el peso es neto, sin empaque. Medimos la participación del procesado en valor y no en kilos y esa decisión es importante, ya que en kilos, el procesado pesa mucho menos y la ventaja de Vietnam casi desaparece al final del periodo: en 2022 fue el 5,7 % de los kilos en Colombia y el 5,6 % en Vietnam, frente a 11,9 % y 14,0 % en valor. La conclusión de que Vietnam procesa más es firme en valor y para 2019--2021, pero no en volumen para 2022--2023.
+El valor es FOB, es decir, el precio en el puerto de salida, sin flete ni seguro y el peso es neto, sin empaque. Medimos la participación del procesado en valor y no en kilos y esa decisión es importante, ya que en kilos, el procesado pesa mucho menos y la ventaja de Vietnam casi desaparece al final del periodo: en 2022 fue el `r num(v("proc_kg", "Colombia", 2022))` % de los kilos en Colombia y el `r num(v("proc_kg", "Vietnam", 2022))` % en Vietnam, frente a `r num(v("proc_valor", "Colombia", 2022))` % y `r num(v("proc_valor", "Vietnam", 2022))` % en valor. La conclusión de que Vietnam procesa más es firme en valor y para 2019--2021, pero no en volumen para 2022--2023.
 
 Café procesado no equivale automáticamente a valor agregado en sentido contable. El valor de un kilo de soluble incluye el café verde que se usó para hacerlo, la energía y el empaque. La diferencia de precio entre un kilo verde y un kilo procesado no es toda valor agregado. Usamos la participación del procesado como indicador aproximado, no como medida del margen.
 
 Las dos aduanas clasifican con el mismo Sistema Armonizado a seis dígitos, así que 2101.11 significa lo mismo en los dos países. Pero quedan tres diferencias que pueden mover el resultado. En primer lugar, dejamos por fuera los descafeinados (0901.12 y 0901.22) y las preparaciones a base de café (2101.12). Si una parte del café procesado vietnamita sale como mezcla, nuestra medida subestima el procesado de Vietnam y la brecha a su favor sería mayor. En segundo lugar, Colombia exporta arábica y Vietnam sobre todo robusta, que se cotiza más barato, por lo que parte de la diferencia en el valor por kilo es de especie y no de transformación. Por último, en varios años Comtrade estima el peso neto cuando el país no lo reporta completo. En 2018 la estimación para Vietnam es atípica (el valor por kilo salta a 3,60 dólares, frente a 1,70 a 2,30 en los años vecinos), por lo que excluimos ese año de todos los cálculos por kilo. Vietnam todavía no ha reportado 2024 a Comtrade, de modo que la ventana común de comparación es 2015 a 2023.
 
-**4. Resultados**
+# 4. Resultados
 
-**Tabla 1. Participación del café procesado y valor unitario de las exportaciones de café (2015--2024)**
-
-  ---------------------------------------------------------------------------------------------------------------------------------
-  **Año**   **Procesado Colombia (% del valor)**   **Procesado Vietnam (% del valor)**   **USD/kg Colombia**   **USD/kg Vietnam**
-  --------- -------------------------------------- ------------------------------------- --------------------- --------------------
-  2015      9,69                                   8,95                                  3,82                  1,96
-
-  2016      9,52                                   9,22                                  3,53                  1,86
-
-  2017      10,04                                  9,81                                  3,79                  2,20
-
-  2018      11,26                                  11,67                                 3,45                  \-
-
-  2019      12,36                                  15,75                                 3,29                  1,70
-
-  2020      12,25                                  18,06                                 3,84                  1,76
-
-  2021      10,91                                  16,53                                 4,81                  1,97
-
-  2022      11,86                                  13,98                                 6,78                  2,29
-
-  2023      14,37                                  15,99                                 5,39                  3,22
-
-  2024      11,41                                  \-                                    5,64                  \-
-  ---------------------------------------------------------------------------------------------------------------------------------
+```{r}
+#| label: tbl-indicadores
+#| tbl-cap: "Participación del café procesado y valor unitario de las exportaciones de café (2015–2024)"
+#| tbl-colwidths: [12, 22, 22, 22, 22]
+kable(
+  lado |>
+    arrange(anio) |>
+    transmute(`Año` = as.character(anio),
+              `Procesado Colombia (% del valor)` = num(proc_valor_Colombia, 2),
+              `Procesado Vietnam (% del valor)`  = num(proc_valor_Vietnam, 2),
+              `USD/kg Colombia` = num(usd_kg_Colombia, 2),
+              `USD/kg Vietnam`  = num(usd_kg_Vietnam, 2)),
+  align = "ccccc")
+```
 
 Fuente: DANE-DIAN y Aduana de Vietnam, reportadas a UN Comtrade, consultadas el 27 de octubre de 2026. Cálculo propio.
 
-Gráfica 1. Participación del café procesado y valor unitario de las exportaciones de café, Colombia y Vietnam, 2015--2024. Fuente: DANE-DIAN (Colombia) y Aduana de Vietnam, reportadas a UN Comtrade; subpartidas 0901.11, 0901.21 y 2101.11; consultadas el 27 de octubre de 2026. Cálculo propio.
+```{r}
+#| label: fig-paneles
+#| fig-cap: "Participación del café procesado y valor unitario de las exportaciones de café, Colombia y Vietnam, 2015–2024. Fuente: DANE-DIAN (Colombia) y Aduana de Vietnam, reportadas a UN Comtrade; subpartidas 0901.11, 0901.21 y 2101.11; consultadas el 27 de octubre de 2026. Cálculo propio."
+#| fig-width: 9
+#| fig-height: 3.8
+#| out-width: "100%"
+g <- ind |>
+  select(pais, anio,
+         `Café procesado (% del valor exportado)` = proc_valor,
+         `Valor unitario (USD por kilo)` = usd_kg) |>
+  pivot_longer(-c(pais, anio), names_to = "medida", values_to = "valor") |>
+  filter(!is.na(valor)) |>
+  ggplot(aes(anio, valor, color = pais)) +
+  geom_line(linewidth = 1) + geom_point(size = 2) +
+  facet_wrap(~medida, scales = "free_y") +
+  scale_color_manual(values = c(Colombia = "#B5651D", Vietnam = "#2E6E5E")) +
+  scale_x_continuous(breaks = 2015:2024) +
+  scale_y_continuous(limits = c(0, NA)) +
+  labs(x = NULL, y = NULL, color = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top", panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = 7))
+g
+ggsave("grafica_cafe.png",
+       g + labs(caption = paste("Fuente: DANE-DIAN y Aduana de Vietnam, reportadas a UN Comtrade;",
+                                "subpartidas 0901.11, 0901.21 y 2101.11, 2015–2024; consultadas el 27-oct-2026. Cálculo propio.")) +
+         theme(plot.caption = element_text(hjust = 0, size = 8, color = "grey30")),
+       width = 9, height = 4.3, dpi = 300, bg = "white")
+```
 
-![](./media/image1.png){width="6.125in" height="2.580439632545932in"}
+En 2015 los dos países partían del mismo lugar: el café procesado era el `r num(v("proc_valor", "Colombia", 2015))` % del valor exportado en Colombia y el `r num(v("proc_valor", "Vietnam", 2015))` % en Vietnam (@tbl-indicadores). Desde 2018 sus caminos se separan (@fig-paneles, panel izquierdo). Vietnam subió al `r num(v("proc_valor", "Vietnam", 2020))` % en 2020 y se mantuvo entre el 14 y el 17 % hasta 2023. Colombia se movió más despacio, con un pico de `r num(v("proc_valor", "Colombia", 2023))` % en 2023 que no se sostuvo en 2024 (`r num(v("proc_valor", "Colombia", 2024))` %). Entre 2019 y 2023 la brecha a favor de Vietnam estuvo entre `r num(min(desde19$brecha_proc))` y `r num(max(desde19$brecha_proc))` puntos porcentuales. Es consistente con lo que @hanley2026 encuentran para Asia, pero es una ventaja moderada, no la abrumadora que suponíamos al empezar.
 
-En 2015 los dos países partían del mismo lugar: el café procesado era el 9,7 % del valor exportado en Colombia y el 8,9 % en Vietnam ([Tabla 1](#tbl-indicadores)). Desde 2018 sus caminos se separan ([Gráfica 1](#fig-paneles), panel izquierdo). Vietnam subió al 18,1 % en 2020 y se mantuvo entre el 14 y el 17 % hasta 2023. Colombia se movió más despacio, con un pico de 14,4 % en 2023 que no se sostuvo en 2024 (11,4 %). Entre 2019 y 2023 la brecha a favor de Vietnam estuvo entre 1,6 y 5,8 puntos porcentuales. Es consistente con lo que Hanley et al. (2026) encuentran para Asia, pero es una ventaja moderada, no la abrumadora que suponíamos al empezar.
+El valor unitario cuenta otra historia (@fig-paneles). Un kilo de café exportado por Colombia vale entre `r num(min(razones$razon_kg))` y `r num(max(razones$razon_kg))` veces lo que vale uno de Vietnam: `r num(v("usd_kg", "Colombia", 2015), 2)` frente a `r num(v("usd_kg", "Vietnam", 2015), 2)` dólares en 2015, y `r num(v("usd_kg", "Colombia", 2023), 2)` frente a `r num(v("usd_kg", "Vietnam", 2023), 2)` en 2023. Si se mira solo el café sin tostar, el kilo colombiano valió `r num(v("usd_kg_verde", "Colombia", 2023), 2)` dólares en 2023 y el vietnamita `r num(v("usd_kg_verde", "Vietnam", 2023), 2)`, es decir, que buena parte de la brecha ya está en el grano.
 
-El valor unitario cuenta otra historia ([Gráfica 1](#fig-paneles)). Un kilo de café exportado por Colombia vale entre 1,7 y 3,0 veces lo que vale uno de Vietnam: 3,82 frente a 1,96 dólares en 2015, y 5,39 frente a 3,22 en 2023. Si se mira solo el café sin tostar, el kilo colombiano valió 4,85 dólares en 2023 y el vietnamita 2,88, es decir, que buena parte de la brecha ya está en el grano.
+El valor por kilo de cada país, $\bar p$, es el promedio de los precios de sus tres productos ponderado por la participación de cada uno en los kilos exportados. La brecha entre Colombia ($C$) y Vietnam ($V$) se parte en dos efectos que suman exactamente la brecha:
 
-El valor por kilo de cada país, $\bar{p}$, es el promedio de los precios de sus tres productos ponderado por la participación de cada uno en los kilos exportados. La brecha entre Colombia ($C$) y Vietnam ($V$) se parte en dos efectos que suman exactamente la brecha:
-
-$${\bar{p}}_{C} - {\bar{p}}_{V} = \underset{\text{efecto mezcla}}{\underbrace{\sum_{j}^{}\left( s_{Cj} - s_{Vj} \right)\frac{p_{Cj} + p_{Vj}}{2}}} + \underset{\text{efecto precio}}{\underbrace{\sum_{j}^{}\frac{s_{Cj} + s_{Vj}}{2}\left( p_{Cj} - p_{Vj} \right)}}$$
+$$
+\bar p_C - \bar p_V =
+\underbrace{\sum_{j} \left(s_{Cj} - s_{Vj}\right)\frac{p_{Cj} + p_{Vj}}{2}}_{\text{efecto mezcla}}
++
+\underbrace{\sum_{j} \frac{s_{Cj} + s_{Vj}}{2}\left(p_{Cj} - p_{Vj}\right)}_{\text{efecto precio}}
+$$
 
 donde $j$ es el producto (verde, tostado o soluble), $s_{ij}$ es la participación del producto $j$ en los kilos que exporta el país $i$ y $p_{ij}$ su precio en dólares por kilo. El efecto mezcla mide cuánto de la brecha se debe a exportar más producto procesado y el efecto precio, cuánto de cada producto de un país vale más que el mismo producto del otro.
 
-**Tabla 2. Descomposición de la brecha en valor por kilo entre Colombia y Vietnam (USD por kilo)**
-
-  -----------------------------------------------------------------------------------------------
-  **Año**   **Brecha total**   **Efecto mezcla**   **Efecto precio**   **del cual: café verde**
-  --------- ------------------ ------------------- ------------------- --------------------------
-  2015      1,86               -0,08               1,94                1,64
-
-  2016      1,67               -0,06               1,73                1,47
-
-  2017      1,59               -0,09               1,68                1,38
-
-  2019      1,59               -0,17               1,76                1,40
-
-  2020      2,07               -0,19               2,26                1,85
-
-  2021      2,84               -0,15               2,99                2,58
-
-  2022      4,49               -0,06               4,55                4,02
-
-  2023      2,16               -0,16               2,33                1,87
-  -----------------------------------------------------------------------------------------------
+```{r}
+#| label: tbl-descomposicion
+#| tbl-cap: "Descomposición de la brecha en valor por kilo entre Colombia y Vietnam (USD por kilo)"
+#| tbl-colwidths: [12, 22, 22, 22, 22]
+kable(descomp |>
+        transmute(`Año` = as.character(anio),
+                  `Brecha total` = num(brecha, 2),
+                  `Efecto mezcla` = num(mezcla, 2),
+                  `Efecto precio` = num(precio, 2),
+                  `del cual: café verde` = num(precio_verde, 2)),
+      align = "ccccc")
+```
 
 Fuente: UN Comtrade. Cálculo propio.
 
-En todos los años el efecto mezcla es pequeño y negativo (entre -0,19 y -0,06 dólares por kilo, [Tabla 2](#tbl-descomposicion)): como Vietnam exporta una parte algo mayor de procesado, la mezcla juega levemente en contra de Colombia. Toda la ventaja colombiana viene del efecto precio, que es mayor que la brecha total, y en promedio el 83 % de ese efecto se explica por el precio del café verde. El resto viene sobre todo del soluble, cuyo kilo colombiano se exportó entre 2,2 y 3,1 veces el precio del vietnamita.
+En todos los años el efecto mezcla es pequeño y negativo (entre `r num(min(descomp$mezcla), 2)` y `r num(max(descomp$mezcla), 2)` dólares por kilo, @tbl-descomposicion): como Vietnam exporta una parte algo mayor de procesado, la mezcla juega levemente en contra de Colombia. Toda la ventaja colombiana viene del efecto precio, que es mayor que la brecha total, y en promedio el `r num(parte_verde, 0)` % de ese efecto se explica por el precio del café verde. El resto viene sobre todo del soluble, cuyo kilo colombiano se exportó entre `r num(min(sol$razon_sol))` y `r num(max(sol$razon_sol))` veces el precio del vietnamita.
 
-Con Comtrade, el café sin tostar fue el 88,6 % del valor que Colombia exportó en 2024, mientras que la FNC reporta que fue el 92,7 % del volumen (Federación Nacional de Cafeteros de Colombia, 2025). Los dos números no miden lo mismo: el nuestro está en dólares y el de la FNC en sacos de 60 kg de café verde equivalente, una unidad que convierte cada kilo procesado en el café verde que se usó para producirlo. Para hacerlos comparables convertimos los kilos de Comtrade con los factores de la Organización Internacional del Café, 1,19 para el tostado y 2,6 para el soluble (Organización Internacional del Café, s. f.a). Así, el café verde pasa a ser el 91,0 % del total y Colombia exporta 11,87 millones de sacos, frente a 12,32 millones según la FNC. La diferencia que queda (1,7 puntos y 0,46 millones de sacos) probablemente viene de lo que no cubren nuestras tres subpartidas, como los descafeinados (0901.12 y 0901.22) y las preparaciones a base de café (2101.12). Para que los dos números fueran idénticos habría que bajar esas subpartidas y comprobar que la FNC y la DIAN registran cada exportación en la misma fecha.
+Con Comtrade, el café sin tostar fue el `r num(verde_val)` % del valor que Colombia exportó en 2024, mientras que la FNC reporta que fue el `r num(fnc_verde)` % del volumen [@fnc2025]. Los dos números no miden lo mismo: el nuestro está en dólares y el de la FNC en sacos de 60 kg de café verde equivalente, una unidad que convierte cada kilo procesado en el café verde que se usó para producirlo. Para hacerlos comparables convertimos los kilos de Comtrade con los factores de la Organización Internacional del Café, 1,19 para el tostado y 2,6 para el soluble [@oicfactores]. Así, el café verde pasa a ser el `r num(verde_eq)` % del total y Colombia exporta `r num(sacos_eq / 1e6, 2)` millones de sacos, frente a `r num(fnc_sacos / 1e6, 2)` millones según la FNC. La diferencia que queda (`r num(fnc_verde - verde_eq)` puntos y `r num((fnc_sacos - sacos_eq) / 1e6, 2)` millones de sacos) probablemente viene de lo que no cubren nuestras tres subpartidas, como los descafeinados (0901.12 y 0901.22) y las preparaciones a base de café (2101.12). Para que los dos números fueran idénticos habría que bajar esas subpartidas y comprobar que la FNC y la DIAN registran cada exportación en la misma fecha.
 
-En estos datos, la menor transformación del café colombiano no se traduce en un menor valor por kilo, pues Colombia captura más por kilo que Vietnam gracias a su grano, que es justo la diferencia entre productores de arábica y de robusta que reportan Görlich et al. (2020). La tesis se sostiene a medias. Es cierto que Colombia transforma poco y que Vietnam transformó más, pero no es cierto, con estos datos, que eso le haga perder valor por kilo. Donde sí puede pesar es en el crecimiento, ya que, entre 2015 y 2023 el valor exportado en estas tres subpartidas creció 1,9 % al año en Colombia y 4,1 % en Vietnam.
+En estos datos, la menor transformación del café colombiano no se traduce en un menor valor por kilo, pues Colombia captura más por kilo que Vietnam gracias a su grano, que es justo la diferencia entre productores de arábica y de robusta que reportan @gorlich2020. La tesis se sostiene a medias. Es cierto que Colombia transforma poco y que Vietnam transformó más, pero no es cierto, con estos datos, que eso le haga perder valor por kilo. Donde sí puede pesar es en el crecimiento, ya que, entre 2015 y 2023 el valor exportado en estas tres subpartidas creció `r num(crec("Colombia"))` % al año en Colombia y `r num(crec("Vietnam"))` % en Vietnam.
 
 No podemos decir que el procesamiento le haga perder dinero a Colombia, porque el valor por kilo no mide márgenes ni costos. No podemos separar la especie de la calidad porque el efecto precio mezcla las dos. No podemos atribuir el mayor crecimiento de Vietnam a su procesado, porque en el mismo periodo cambiaron los precios internacionales del arábica y del robusta. Y todas las cifras están en dólares corrientes, con pesos estimados por Comtrade en varios años.
 
-**5. Implicación**
+# 5. Implicación
 
-Este resultado le sirve a la Federación Nacional de Cafeteros para decidir en qué tipo de transformación invertir sus programas de promoción exportadora. Si tenemos razón, la Federación dejaría de medir su éxito por la participación del procesado en el volumen exportado y pasaría a medirlo por el valor por kilo del procesado. Imitar el modelo vietnamita, basado en volumen y en soluble barato, no es el camino: Colombia ya obtiene más dólares por kilo que Vietnam sin procesar, y esa ventaja está en el grano. Procesar más solo aumenta el valor capturado si el producto procesado conserva la prima de calidad, como ya ocurre con el soluble colombiano. La recomendación es concentrar el esfuerzo en procesados de alto valor (tostados de origen y soluble premium) y no en ganar participación en volumen.
+Este resultado le sirve a la **Federación Nacional de Cafeteros** para decidir en qué tipo de transformación invertir sus programas de promoción exportadora. Si tenemos razón, la Federación dejaría de medir su éxito por la participación del procesado en el volumen exportado y pasaría a medirlo por el valor por kilo del procesado. Imitar el modelo vietnamita, basado en volumen y en soluble barato, no es el camino: Colombia ya obtiene más dólares por kilo que Vietnam sin procesar, y esa ventaja está en el grano. Procesar más solo aumenta el valor capturado si el producto procesado conserva la prima de calidad, como ya ocurre con el soluble colombiano. La recomendación es concentrar el esfuerzo en procesados de alto valor (tostados de origen y soluble premium) y no en ganar participación en volumen.
 
-El resultado también es relevante para quien negocia los acuerdos comerciales de Colombia: si los aranceles de los países importadores sobre el café procesado desestimulan la transformación (Görlich et al., 2020), reducirlos en los mercados de destino es condición para que esa inversión rinda.
+El resultado también es relevante para quien negocia los acuerdos comerciales de Colombia: si los aranceles de los países importadores sobre el café procesado desestimulan la transformación [@gorlich2020], reducirlos en los mercados de destino es condición para que esa inversión rinda.
 
 Para que este trabajo le sirviera de verdad a la Federación harían falta tres cosas que no tenemos: los costos de producir un kilo de tostado o de soluble en Colombia, para pasar del valor por kilo al margen; las exportaciones por destino, para saber en qué mercados el procesado colombiano compite con el vietnamita; y las subpartidas que dejamos por fuera. Queda abierta una pregunta: por qué Colombia no ha procesado más. Puede ser falta de inversión, aranceles en destino o una decisión racional de los exportadores dada la prima del grano.
 
-**Referencias**
+# Referencias
 
-Federación Nacional de Cafeteros de Colombia. (2025). *Informe de exportaciones de café, diciembre de 2024*. Federación Nacional de Cafeteros de Colombia. <https://federaciondecafeteros.org/app/uploads/2025/01/Informe-Expos-Diciembre-24.pdf>
+::: {#refs}
+:::
 
-García Juárez, H. D., Montes Ninaquispe, J. C., Marquez Yauri, H. Y., Rodríguez Abraham, A. R., Corrales Otazú, C. D., Apaza Miranda, S. J., Suysuy Chambergo, E. J., León Luyo, S. L., & Flores Castillo, M. M. (2025). Market Diversification and International Competitiveness of South American Coffee: A Comparative Analysis for Export Sustainability. *Sustainability*, *17*(11), 5091. <https://doi.org/10.3390/su17115091>
+{{< pagebreak >}}
 
-Görlich, D., Hanley, A., Liu, W.-H., & Semrau, F. O. (2020). *Fostering the Development of the Coffee Global Value Chain* (Kiel Working Paper 2170). Kiel Institute for the World Economy. <https://econpapers.repec.org/RePEc:zbw:ifwkwp:2170>
-
-Hanley, A., Liu, W.-H., Semrau, F. O., & Görlich, D. (2026). Climbing the Coffee Global Value Chain---Three Decades of Trade and Upgrading. *Journal of International Development*, *38*(1), 88-111. <https://doi.org/10.1002/jid.70033>
-
-Londoño Arias, J. A., Valencia-Cárdenas, M., Restrepo-Morales, J. A., López-Cadavid, D. A., & Vanegas-López, J. G. (2025). Composición de las exportaciones colombianas: un análisis con énfasis en el café. *Revista Facultad de Ciencias Económicas*, *33*(1), 33-57. <https://doi.org/10.18359/rfce.7136>
-
-Naciones Unidas, División de Estadística. (2026). *UN Comtrade Database: exportaciones de Colombia (reportante 170) y Vietnam (reportante 704) por subpartida HS 0901.11, 0901.21 y 2101.11, 2015--2024*. Conjunto de datos. <https://comtradeplus.un.org>
-
-Nguyen, L. (2025). *Vietnam: Coffee Annual* (VM2025-0018). Foreign Agricultural Service, U.S. Department of Agriculture. <https://apps.fas.usda.gov/newgainapi/api/Report/DownloadReportByFileName?fileName=Coffee+Annual_Hanoi_Vietnam_VM2025-0018.pdf>
-
-Organización Internacional del Café. (2020). *Coffee Development Report 2020: The Value of Coffee---Sustainability, Inclusiveness, and Resilience of the Coffee Global Value Chain*. Organización Internacional del Café. <https://www.ico.org/wp-content/uploads/2022/11/CDR2020.pdf>
-
-Organización Internacional del Café. (s. f.a). *Conversion Factors for Roasted, Decaffeinated, Liquid and Soluble Coffee to Be Used under the 2007 Agreement*. <https://ico.org/documents/Key%20documents/kd-conversion-factors-e.pdf>
-
-Organización Internacional del Café. (s. f.b). *Cuadros de estadísticas comerciales*. <https://www.ico.org/es/resources/trade-statistics-tables/>
-
-**Anexo 1. Cuadro de herramientas y evidencia**
+# Anexo 1. Cuadro de herramientas y evidencia
 
 Todas las rutas son del repositorio <https://github.com/vallejopsimon/cafecol-viet>.
 
-**Tabla 3. Herramientas, evidencia y quién las operó**
+```{=latex}
+\small
+```
 
-  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  **Herramienta**                   **¿La usaron?**   **Para qué, en este trabajo**                                         **Dónde está la evidencia**                                                                              **Quién la operó**                  **Qué falló y cómo lo resolvieron**
-  --------------------------------- ----------------- --------------------------------------------------------------------- -------------------------------------------------------------------------------------------------------- ----------------------------------- ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  GitHub                            Sí                Guardar las versiones y entregar los archivos                         La URL del repositorio                                                                                   Simón Vallejo                       Al crear el repositorio GitHub mostró «Something went wrong»; recargamos y lo volvimos a crear. Lo elegimos porque es el que pide el curso y deja el historial a la vista.
+| Herramienta | ¿La usaron? | Para qué, en este trabajo | Dónde está la evidencia | Quién la operó | Qué falló y cómo lo resolvieron |
+|:---|:---|:---|:---|:---|:---|
+| GitHub | Sí | Guardar las versiones y entregar los archivos | La URL del repositorio | Simón Vallejo | Al crear el repositorio GitHub mostró «Something went wrong»; recargamos y lo volvimos a crear. Lo elegimos porque es el que pide el curso y deja el historial a la vista. |
+| Quarto | Sí | Escribir el paper con el código integrado y compilarlo a PDF y Word | `cafe.qmd`, que crea a `cafe.pdf` | Samuel Mesa | La primera versión tenía la tabla y la gráfica pegadas como imagen; las reemplazamos por código que lee el `.csv`, para que cada número salga del script. |
+| Zotero / `.bib` | Solo el `.bib` | Gestionar las referencias y citarlas con clave | `referencias.bib`, `apa.csl` y las citas `[@clave]` del texto | Juan José Ramírez | Las citas estaban escritas a mano en Word y las pasamos a claves. Una cita con «; cálculo propio» salía mal y se resolvió escapando el punto y coma. |
+| Excel | Sí | Guardar la descarga original, la limpieza y los cálculos de control | `Café colombia.xlsx` y `café vietnam.xlsx` | Simón Vallejo y Juan José Ramírez | Intentamos abrir los `.xlsx` en R con `load()` y falló; pasamos los datos a `cafe_colombia_vietnam.csv` y los leemos con `read.csv()`. |
+| R | Sí | Calcular los indicadores, la descomposición y las gráficas | Los *chunks* de `cafe.qmd` (cada tabla, gráfica y número) y `Graficas_y_datos.Rmd` (análisis exploratorio) | Simón Vallejo | El `.Rmd` no compilaba porque tenía `install.packages()` dentro del *chunk*; lo sacamos. |
+| IA (Claude) | Sí | Apoyo en la descarga de datos, el código y resumen de fuentes. | Anexo 2 | Simón Vallejo y Samuel Mesa | Se equivocó en una cifra y en la descripción de una fuente y lo detectamos recalculando con el script y leyendo el resumen original. |
+| Overleaf / LaTeX | No | --- | --- | --- | No lo usamos: Quarto compila el PDF con LaTeX por debajo y deja el código y el texto en un solo archivo. |
+| Power BI | No | --- | --- | --- | No lo usamos: la comparación son dos series de diez años y una gráfica estática hecha con R se puede rastrear al script; un tablero no agregaba información. |
+| Otra: UN Comtrade (API pública) | Sí | Bajar las exportaciones por subpartida de los dos países | Hoja «fuentes» de cada `.xlsx` (URL exacta y fecha de descarga) | Simón Vallejo | La versión gratuita solo admite un año por consulta, por lo que hicimos una consulta por año. Vietnam no ha reportado 2024 y en 2018 su peso es estimado. |
 
-  Quarto                            Sí                Escribir el paper con el código integrado y compilarlo a PDF y Word   cafe.qmd, que crea a cafe.pdf                                                                            Samuel Mesa                         La primera versión tenía la tabla y la gráfica pegadas como imagen; las reemplazamos por código que lee el .csv, para que cada número salga del script.
+: Herramientas, evidencia y quién las operó {#tbl-herramientas tbl-colwidths="[12,8,17,21,10,32]"}
 
-  Zotero / .bib                     Solo el .bib      Gestionar las referencias y citarlas con clave                        referencias.bib, apa.csl y las citas \[@clave\] del texto                                                Juan José Ramírez                   Las citas estaban escritas a mano en Word y las pasamos a claves. Una cita con «; cálculo propio» salía mal y se resolvió escapando el punto y coma.
+```{=latex}
+\normalsize
+```
 
-  Excel                             Sí                Guardar la descarga original, la limpieza y los cálculos de control   Café colombia.xlsx y café vietnam.xlsx                                                                   Simón Vallejo y Juan José Ramírez   Intentamos abrir los .xlsx en R con load() y falló; pasamos los datos a cafe_colombia_vietnam.csv y los leemos con read.csv().
+# Anexo 2. Declaración de uso de IA
 
-  R                                 Sí                Calcular los indicadores, la descomposición y las gráficas            Los *chunks* de cafe.qmd (cada tabla, gráfica y número) y Graficas_y_datos.Rmd (análisis exploratorio)   Simón Vallejo                       El .Rmd no compilaba porque tenía install.packages() dentro del *chunk*; lo sacamos.
-
-  IA (Claude)                       Sí                Apoyo en la descarga de datos, el código y resumen de fuentes.        Anexo 2                                                                                                  Simón Vallejo y Samuel Mesa         Se equivocó en una cifra y en la descripción de una fuente y lo detectamos recalculando con el script y leyendo el resumen original.
-
-  Overleaf / LaTeX                  No                ---                                                                   ---                                                                                                      ---                                 No lo usamos: Quarto compila el PDF con LaTeX por debajo y deja el código y el texto en un solo archivo.
-
-  Power BI                          No                ---                                                                   ---                                                                                                      ---                                 No lo usamos: la comparación son dos series de diez años y una gráfica estática hecha con R se puede rastrear al script; un tablero no agregaba información.
-
-  Otra: UN Comtrade (API pública)   Sí                Bajar las exportaciones por subpartida de los dos países              Hoja «fuentes» de cada .xlsx (URL exacta y fecha de descarga)                                            Simón Vallejo                       La versión gratuita solo admite un año por consulta, por lo que hicimos una consulta por año. Vietnam no ha reportado 2024 y en 2018 su peso es estimado.
-  ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-**Anexo 2. Declaración de uso de IA**
 
 1.  **Herramienta y fecha.** Usamos Claude entre el 27 de octubre y el 16 de noviembre de 2026. Lo operó Simón Vallejo y Samuel Mesa.
 
